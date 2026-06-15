@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Water Tracker</title>
+<meta name="description" content="A simple daily water intake tracker" />
+<meta name="theme-color" content="#3b82f6" />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Water" />
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+
+<style>
+  html, body, #root { height: 100%; }
+  body { margin: 0; -webkit-tap-highlight-color: transparent; }
+  * { -webkit-user-select: none; user-select: none; }
+  input, textarea { -webkit-user-select: text; user-select: text; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback } = React;
+
+// ---- lightweight inline icons (no external icon lib needed) ----
+const Icon = ({ children, className }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+       strokeLinecap="round" strokeLinejoin="round" className={className}>
+    {children}
+  </svg>
+);
+const Droplet = ({ className, fill }) => (
+  <Icon className={className}>
+    <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.32 0z" fill={fill || "none"} />
+  </Icon>
+);
+const Plus = ({ className }) => <Icon className={className}><path d="M12 5v14M5 12h14" /></Icon>;
+const Minus = ({ className }) => <Icon className={className}><path d="M5 12h14" /></Icon>;
+const Check = ({ className }) => <Icon className={className}><path d="M20 6 9 17l-5-5" /></Icon>;
+const XIcon = ({ className }) => <Icon className={className}><path d="M18 6 6 18M6 6l12 12" /></Icon>;
+const Bell = ({ className }) => (
+  <Icon className={className}>
+    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+  </Icon>
+);
+
+// ---- helpers ----
+const todayKey = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const dayLabel = (dateStr) => {
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString(undefined, { weekday: "short" });
+};
+
+const last7Dates = () => {
+  const out = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
+  }
+  return out;
+};
+
+// ---- storage (localStorage works fine on a real hosted page) ----
+const storage = {
+  get(key, fallback) {
+    try {
+      const v = localStorage.getItem(key);
+      return v === null ? fallback : JSON.parse(v);
+    } catch (e) {
+      return fallback;
+    }
+  },
+  set(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {}
+  },
+};
+
+function WaterTracker() {
+  const [goal, setGoal] = useState(8);
+  const [glassSize, setGlassSize] = useState(250);
+  const [unit, setUnit] = useState("ml");
+  const [history, setHistory] = useState({});
+  const [loaded, setLoaded] = useState(false);
+  const [showGoalEdit, setShowGoalEdit] = useState(false);
+  const [reminder, setReminder] = useState(null);
+
+  const today = todayKey();
+  const count = history[today] || 0;
+
+  // Load on mount
+  useEffect(() => {
+    const loadedGoal = storage.get("water:goal", 8);
+    const loadedSize = storage.get("water:glassSize", 250);
+    const loadedUnit = storage.get("water:unit", "ml");
+    const loadedHistory = storage.get("water:history", {});
+
+    setGoal(loadedGoal);
+    setGlassSize(loadedSize);
+    setUnit(loadedUnit);
+    setHistory(loadedHistory);
+    setLoaded(true);
+
+    // Pace check on open
+    const now = new Date();
+    const hour = now.getHours();
+    const t = todayKey();
+    const todayCount = loadedHistory[t] || 0;
+    const dayStart = 8;
+    const dayEnd = 20;
+    if (hour >= dayStart && hour <= dayEnd && todayCount < loadedGoal) {
+      const elapsed = Math.min(Math.max(hour - dayStart, 0), dayEnd - dayStart);
+      const expected = Math.floor((elapsed / (dayEnd - dayStart)) * loadedGoal);
+      if (todayCount < expected) {
+        const behind = expected - todayCount;
+        setReminder(`You're a bit behind today — try to drink ${behind} more glass${behind > 1 ? "es" : ""} to stay on pace.`);
+      }
+    } else if (hour > dayEnd && todayCount < loadedGoal) {
+      setReminder(`You're at ${todayCount}/${loadedGoal} glasses today. Still time for a few more before bed!`);
+    }
+
+    // Register service worker
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    }
+  }, []);
+
+  const saveGoal = useCallback((v) => { setGoal(v); storage.set("water:goal", v); }, []);
+  const saveGlassSize = useCallback((v) => { setGlassSize(v); storage.set("water:glassSize", v); }, []);
+  const saveUnit = useCallback((v) => { setUnit(v); storage.set("water:unit", v); }, []);
+  const saveHistory = useCallback((v) => { setHistory(v); storage.set("water:history", v); }, []);
+
+  const addGlass = () => {
+    const next = { ...history, [today]: Math.min(goal + 4, (history[today] || 0) + 1) };
+    saveHistory(next);
+  };
+  const removeGlass = () => {
+    const next = { ...history, [today]: Math.max(0, (history[today] || 0) - 1) };
+    saveHistory(next);
+  };
+
+  const adjustGoal = (delta) => saveGoal(Math.max(1, Math.min(20, goal + delta)));
+
+  const unitStep = unit === "ml" ? 50 : 2;
+  const adjustGlassSize = (delta) => {
+    const min = unit === "ml" ? 50 : 2;
+    const max = unit === "ml" ? 1000 : 32;
+    saveGlassSize(Math.max(min, Math.min(max, glassSize + delta)));
+  };
+  const switchUnit = (newUnit) => {
+    if (newUnit === unit) return;
+    let converted;
+    if (newUnit === "oz") {
+      converted = Math.max(2, Math.min(32, Math.round(glassSize / 29.5735)));
+    } else {
+      converted = Math.max(50, Math.min(1000, Math.round(glassSize * 29.5735 / 50) * 50));
+    }
+    saveUnit(newUnit);
+    saveGlassSize(converted);
+  };
+
+  const remaining = Math.max(0, goal - count);
+  const pct = Math.min(100, Math.round((count / goal) * 100));
+  const circumference = 2 * Math.PI * 88;
+  const dashOffset = circumference - (Math.min(pct, 100) / 100) * circumference;
+  const week = last7Dates();
+
+  if (!loaded) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-sky-50 to-blue-100">
+        <div className="text-sky-400 text-sm">Loading...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-sky-50 via-blue-50 to-cyan-50 flex flex-col items-center px-4 py-8 font-sans">
+      <div className="w-full max-w-sm">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <Droplet className="w-6 h-6 text-blue-500" fill="currentColor" />
+            <h1 className="text-xl font-semibold text-slate-800 tracking-tight">Water Tracker</h1>
+          </div>
+          <button onClick={() => setShowGoalEdit(s => !s)}
+            className="text-xs font-medium text-blue-500 hover:text-blue-600 px-3 py-1.5 rounded-full bg-white/70 border border-blue-100 transition-colors">
+            Goal
+          </button>
+        </div>
+
+        {reminder && (
+          <div className="mb-4 flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3">
+            <Bell className="w-4 h-4 text-blue-400 mt-0.5 flex-shrink-0" />
+            <p className="text-xs text-blue-600 flex-1 leading-relaxed">{reminder}</p>
+            <button onClick={() => setReminder(null)} className="text-blue-300 hover:text-blue-500 flex-shrink-0" aria-label="Dismiss reminder">
+              <XIcon className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {showGoalEdit && (
+          <div className="mb-4 space-y-3 bg-white/70 rounded-2xl py-3 px-4 border border-blue-100">
+            <div className="flex items-center justify-center gap-4">
+              <button onClick={() => adjustGoal(-1)} className="w-9 h-9 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center active:scale-95 transition-transform" aria-label="Decrease goal">
+                <Minus className="w-4 h-4" />
+              </button>
+              <span className="text-sm text-slate-600">Daily goal: <span className="font-semibold text-slate-800">{goal} glasses</span></span>
+              <button onClick={() => adjustGoal(1)} className="w-9 h-9 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center active:scale-95 transition-transform" aria-label="Increase goal">
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex items-center justify-center gap-4 pt-1 border-t border-blue-50">
+              <button onClick={() => adjustGlassSize(-unitStep)} className="w-9 h-9 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center active:scale-95 transition-transform" aria-label="Decrease glass size">
+                <Minus className="w-4 h-4" />
+              </button>
+              <span className="text-sm text-slate-600">Glass size: <span className="font-semibold text-slate-800">{glassSize}{unit}</span></span>
+              <button onClick={() => adjustGlassSize(unitStep)} className="w-9 h-9 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center active:scale-95 transition-transform" aria-label="Increase glass size">
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex items-center justify-center gap-2 pt-1">
+              <button onClick={() => switchUnit("ml")} className={`text-xs font-medium px-3 py-1 rounded-full transition-colors ${unit === "ml" ? "bg-blue-500 text-white" : "bg-blue-50 text-blue-500"}`}>mL</button>
+              <button onClick={() => switchUnit("oz")} className={`text-xs font-medium px-3 py-1 rounded-full transition-colors ${unit === "oz" ? "bg-blue-500 text-white" : "bg-blue-50 text-blue-500"}`}>fl oz</button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-col items-center my-6">
+          <div className="relative w-56 h-56">
+            <svg className="w-full h-full -rotate-90" viewBox="0 0 200 200">
+              <circle cx="100" cy="100" r="88" fill="none" stroke="#dbeafe" strokeWidth="14" />
+              <circle cx="100" cy="100" r="88" fill="none" stroke="#3b82f6" strokeWidth="14" strokeLinecap="round"
+                strokeDasharray={circumference} strokeDashoffset={dashOffset} className="transition-all duration-500 ease-out" />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-5xl font-bold text-slate-800">{count}</span>
+              <span className="text-sm text-slate-400 mt-1">of {goal} glasses</span>
+              <span className="text-xs text-blue-400 mt-2 font-medium">
+                {remaining === 0 ? "Goal reached! \uD83C\uDF89" : `${remaining} to go`}
+              </span>
+              <span className="text-xs text-slate-400 mt-1">{count * glassSize}{unit} of {goal * glassSize}{unit}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-center gap-4 mb-8">
+          <button onClick={removeGlass} disabled={count === 0}
+            className="w-12 h-12 rounded-full bg-white border border-blue-100 text-slate-400 flex items-center justify-center disabled:opacity-40 active:scale-95 transition-transform shadow-sm" aria-label="Remove a glass">
+            <Minus className="w-5 h-5" />
+          </button>
+          <button onClick={addGlass}
+            className="flex-1 max-w-xs h-16 rounded-2xl bg-blue-500 text-white text-lg font-semibold flex items-center justify-center gap-2 shadow-lg shadow-blue-200 active:scale-[0.98] transition-transform">
+            <Droplet className="w-5 h-5" fill="currentColor" />
+            I drank a glass
+          </button>
+        </div>
+
+        <div className="bg-white/70 rounded-2xl p-4 border border-blue-100">
+          <h2 className="text-sm font-semibold text-slate-600 mb-3">Last 7 days</h2>
+          <div className="flex justify-between">
+            {week.map((d) => {
+              const c = history[d] || 0;
+              const hit = c >= goal;
+              const isToday = d === today;
+              return (
+                <div key={d} className="flex flex-col items-center gap-1.5">
+                  <span className={`text-xs ${isToday ? "text-blue-500 font-semibold" : "text-slate-400"}`}>{dayLabel(d)}</span>
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center border-2 ${hit ? "bg-blue-500 border-blue-500" : "bg-white border-slate-200"}`}>
+                    {hit ? <Check className="w-4 h-4 text-white" /> : <span className="text-xs text-slate-400">{c}</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<WaterTracker />);
+</script>
+</body>
+</html>
