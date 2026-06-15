@@ -92,8 +92,9 @@ const storage = {
   },
 };
 
+const DAILY_TARGET_ML = 3700;
+
 function WaterTracker() {
-  const [goal, setGoal] = useState(8);
   const [glassSize, setGlassSize] = useState(250);
   const [unit, setUnit] = useState("ml");
   const [history, setHistory] = useState({});
@@ -106,12 +107,12 @@ function WaterTracker() {
 
   // Load on mount
   useEffect(() => {
-    const loadedGoal = storage.get("water:goal", 8);
     const loadedSize = storage.get("water:glassSize", 250);
     const loadedUnit = storage.get("water:unit", "ml");
     const loadedHistory = storage.get("water:history", {});
+    const loadedSizeInMl = loadedUnit === "ml" ? loadedSize : Math.round(loadedSize * 29.5735);
+    const loadedGoal = Math.ceil(DAILY_TARGET_ML / loadedSizeInMl);
 
-    setGoal(loadedGoal);
     setGlassSize(loadedSize);
     setUnit(loadedUnit);
     setHistory(loadedHistory);
@@ -129,7 +130,7 @@ function WaterTracker() {
       const expected = Math.floor((elapsed / (dayEnd - dayStart)) * loadedGoal);
       if (todayCount < expected) {
         const behind = expected - todayCount;
-        setReminder(`You're a bit behind today — try to drink ${behind} more glass${behind > 1 ? "es" : ""} to stay on pace.`);
+        setReminder(`You're a bit behind today — try to drink ${behind} more cup${behind > 1 ? "s" : ""} to stay on pace.`);
       }
     } else if (hour > dayEnd && todayCount < loadedGoal) {
       setReminder(`You're at ${todayCount}/${loadedGoal} glasses today. Still time for a few more before bed!`);
@@ -141,7 +142,6 @@ function WaterTracker() {
     }
   }, []);
 
-  const saveGoal = useCallback((v) => { setGoal(v); storage.set("water:goal", v); }, []);
   const saveGlassSize = useCallback((v) => { setGlassSize(v); storage.set("water:glassSize", v); }, []);
   const saveUnit = useCallback((v) => { setUnit(v); storage.set("water:unit", v); }, []);
   const saveHistory = useCallback((v) => { setHistory(v); storage.set("water:history", v); }, []);
@@ -154,8 +154,6 @@ function WaterTracker() {
     const next = { ...history, [today]: Math.max(0, (history[today] || 0) - 1) };
     saveHistory(next);
   };
-
-  const adjustGoal = (delta) => saveGoal(Math.max(1, Math.min(20, goal + delta)));
 
   const unitStep = unit === "ml" ? 50 : 2;
   const adjustGlassSize = (delta) => {
@@ -175,8 +173,12 @@ function WaterTracker() {
     saveGlassSize(converted);
   };
 
+  const glassSizeInMl = unit === "ml" ? glassSize : Math.round(glassSize * 29.5735);
+  const goal = Math.ceil(DAILY_TARGET_ML / glassSizeInMl);
+  const drunkMl = count * glassSizeInMl;
+  const remainingMl = Math.max(0, DAILY_TARGET_ML - drunkMl);
   const remaining = Math.max(0, goal - count);
-  const pct = Math.min(100, Math.round((count / goal) * 100));
+  const pct = Math.min(100, Math.round((drunkMl / DAILY_TARGET_ML) * 100));
   const circumference = 2 * Math.PI * 88;
   const dashOffset = circumference - (Math.min(pct, 100) / 100) * circumference;
   const week = last7Dates();
@@ -199,7 +201,7 @@ function WaterTracker() {
           </div>
           <button onClick={() => setShowGoalEdit(s => !s)}
             className="text-xs font-medium text-blue-500 hover:text-blue-600 px-3 py-1.5 rounded-full bg-white/70 border border-blue-100 transition-colors">
-            Goal
+            Cup size
           </button>
         </div>
 
@@ -215,14 +217,8 @@ function WaterTracker() {
 
         {showGoalEdit && (
           <div className="mb-4 space-y-3 bg-white/70 rounded-2xl py-3 px-4 border border-blue-100">
-            <div className="flex items-center justify-center gap-4">
-              <button onClick={() => adjustGoal(-1)} className="w-9 h-9 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center active:scale-95 transition-transform" aria-label="Decrease goal">
-                <Minus className="w-4 h-4" />
-              </button>
-              <span className="text-sm text-slate-600">Daily goal: <span className="font-semibold text-slate-800">{goal} glasses</span></span>
-              <button onClick={() => adjustGoal(1)} className="w-9 h-9 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center active:scale-95 transition-transform" aria-label="Increase goal">
-                <Plus className="w-4 h-4" />
-              </button>
+            <div className="text-center text-xs text-slate-500 pb-1">
+              Daily target: <span className="font-semibold text-slate-700">3.7L</span> · {goal} cups of {glassSize}{unit} each
             </div>
             <div className="flex items-center justify-center gap-4 pt-1 border-t border-blue-50">
               <button onClick={() => adjustGlassSize(-unitStep)} className="w-9 h-9 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center active:scale-95 transition-transform" aria-label="Decrease glass size">
@@ -249,11 +245,13 @@ function WaterTracker() {
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
               <span className="text-5xl font-bold text-slate-800">{count}</span>
-              <span className="text-sm text-slate-400 mt-1">of {goal} glasses</span>
+              <span className="text-sm text-slate-400 mt-1">of {goal} cups</span>
               <span className="text-xs text-blue-400 mt-2 font-medium">
-                {remaining === 0 ? "Goal reached! \uD83C\uDF89" : `${remaining} to go`}
+                {remaining === 0 ? "Goal reached! \uD83C\uDF89" : `${remaining} more cup${remaining !== 1 ? "s" : ""}`}
               </span>
-              <span className="text-xs text-slate-400 mt-1">{count * glassSize}{unit} of {goal * glassSize}{unit}</span>
+              <span className="text-xs text-slate-400 mt-1">
+                {drunkMl >= 1000 ? (drunkMl / 1000).toFixed(2) + "L" : drunkMl + "ml"} of 3.7L
+              </span>
             </div>
           </div>
         </div>
